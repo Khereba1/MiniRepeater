@@ -24,9 +24,8 @@ object RootRouter {
     }
 
     fun detectUpstream(): String {
-        val res = runRoot(
-            "ip route get 8.8.8.8 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -n 1"
-        )
+        val cmd = """ip route get 8.8.8.8 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -n 1"""
+        val res = runRoot(cmd)
         return if (res.exitCode == 0 && res.output.isNotBlank()) res.output else "wlan0"
     }
 
@@ -75,19 +74,16 @@ object RootRouter {
     }
 
     fun countClients(iface: String): Int {
-        val res = runRoot("ip neigh show dev "$iface" 2>/dev/null | grep -E 'REACHABLE|STALE|DELAY' | wc -l")
+        val cmd = """ip neigh show dev "$iface" 2>/dev/null | grep -E 'REACHABLE|STALE|DELAY' | wc -l"""
+        val res = runRoot(cmd)
         return res.output.trim().toIntOrNull() ?: 0
     }
 
     fun ensureDnsmasqAlive(iface: String): Boolean {
         val check = runRoot("pgrep -f '$LEASE_FILE'")
         if (check.exitCode == 0 && check.output.isNotBlank()) return true
-        val start = runRoot(
-            "/system/bin/dnsmasq --interface="$iface" --bind-interfaces " +
-                "--dhcp-range=192.168.49.10,192.168.49.250,12h " +
-                "--dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 " +
-                "--port=0 --dhcp-leasefile="$LEASE_FILE""
-        )
+        val cmd = """/system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" """.trim()
+        val start = runRoot(cmd)
         return start.exitCode == 0
     }
 
