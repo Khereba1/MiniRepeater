@@ -46,6 +46,8 @@ class RepeaterService : Service() {
     private var activeIface: String? = null
     private var activeUpstream: String = "wlan0"
     private var activeSsid: String = ""
+    @Volatile
+    private var userStopped: Boolean = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -58,7 +60,7 @@ class RepeaterService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopRepeater()
-            else -> startRepeater()
+            else -> startRepeater(isAutoRestart = false)
         }
         return START_STICKY
     }
@@ -69,26 +71,28 @@ class RepeaterService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun startRepeater() {
+    private fun startRepeater(isAutoRestart: Boolean) {
+        userStopped = false
         val ssid = Prefs.getSsid(this)
         val pass = Prefs.getPassword(this)
         activeSsid = ssid
 
-        val notif = buildNotification(ssid, 0)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        if (!isAutoRestart) {
+            val notif = buildNotification(ssid, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
+            acquireLocks()
+            RepeaterState.update { it.copy(status = ServiceStatus.STARTING, ssid = ssid) }
+            if (!isLocationEnabled()) {
+                AppLog.log("P2P", "Warning: Location is OFF — turn Location ON if P2P fails.")
+            }
+            AppLog.log("P2P", "Starting group: $ssid")
         } else {
-            startForeground(NOTIF_ID, notif)
+            AppLog.log("P2P", "Idle timeout detected; auto-restarting $ssid...")
         }
-
-        acquireLocks()
-        RepeaterState.update { it.copy(status = ServiceStatus.STARTING, ssid = ssid) }
-
-        if (!isLocationEnabled()) {
-            AppLog.log("P2P", "Warning: Location is OFF — turn Location ON if P2P fails.")
-        }
-
-        AppLog.log("P2P", "Starting group: $ssid")
 
         val manager = p2pManager
         if (manager == null) {
@@ -97,7 +101,9 @@ class RepeaterService : Service() {
             return
         }
 
-        p2pChannel = manager.initialize(this, mainLooper, null)
+        if (p2pChannel == null) {
+            p2pChannel = manager.initialize(this, mainLooper, null)
+        }
         val channel = p2pChannel ?: run {
             AppLog.log("P2P", "Failed to initialize P2P channel")
             stopRepeater()
@@ -110,19 +116,18 @@ class RepeaterService : Service() {
             .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
             .build()
 
-        // Remove any stale group, then wait 700ms so WifiP2pService is not BUSY (reason=2)
         manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 scope.launch(Dispatchers.Main) {
                     delay(700)
-                    createGroupWithFallback(manager, channel, config)
+                    if (!userStopped) createGroupWithFallback(manager, channel, config)
                 }
             }
 
             override fun onFailure(reason: Int) {
                 scope.launch(Dispatchers.Main) {
                     delay(700)
-                    createGroupWithFallback(manager, channel, config)
+                    if (!userStopped) createGroupWithFallback(manager, channel, config)
                 }
             }
         })
@@ -144,6 +149,7 @@ class RepeaterService : Service() {
                 AppLog.log("P2P", "Custom config failed (reason=$reason); trying system P2P group...")
                 scope.launch(Dispatchers.Main) {
                     delay(900)
+                    if (userStopped) return@launch
                     manager.createGroup(channel, object : WifiP2pManager.ActionListener {
                         override fun onSuccess() {
                             AppLog.log("P2P", "System P2P group created.")
@@ -219,12 +225,15 @@ class RepeaterService : Service() {
                 )
             }
 
-            while (isActive) {
+            while (isActive && !userStopped) {
                 delay(8000)
+                if (userStopped) break
                 val currentIface = RootRouter.findP2pInterface()
                 if (currentIface.isNullOrBlank()) {
-                    AppLog.log("P2P", "Interface dropped; stopping service.")
-                    stopRepeater()
+                    // Android 2-minute P2P idle timeout: auto-recreate group seamlessly
+                    scope.launch(Dispatchers.Main) {
+                        if (!userStopped) startRepeater(isAutoRestart = true)
+                    }
                     break
                 }
                 if (currentIface != activeIface) {
@@ -242,6 +251,7 @@ class RepeaterService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun stopRepeater() {
+        userStopped = true
         watchdogJob?.cancel()
         watchdogJob = null
 
@@ -330,6 +340,7 @@ class RepeaterService : Service() {
     }
 
     override fun onDestroy() {
+        userStopped = true
         watchdogJob?.cancel()
         releaseLocks()
         scope.cancel()
