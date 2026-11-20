@@ -1,0 +1,35 @@
+<resources>
+    <string name="developer_label">المطوّر</string>
+    <string name="subtitle">موزّع واي فاي بالروت (بدون بروكسي)</string>
+    <string name="status_running">شغّال</string>
+    <string name="status_starting">جاري التشغيل…</string>
+    <string name="status_stopped">متوقف</string>
+    <string name="btn_start">تشغيل البث</string>
+    <string name="btn_stop">إيقاف البث</string>
+    <string name="label_ssid">اسم الشبكة (يبدأ بـ DIRECT-XX-)</string>
+    <string name="label_password">كلمة المرور (8 حروف على الأقل)</string>
+    <string name="label_iface">الواجهة</string>
+    <string name="label_clients">الأجهزة</string>
+    <string name="label_upstream">المصدر</string>
+    <string name="switch_autostart">تشغيل تلقائي مع فتح الجهاز</string>
+    <string name="btn_fix_pmf">إصلاح PMF (قناة 6)</string>
+    <string name="section_config">إعدادات الشبكة</string>
+    <string name="section_prefs">المظهر واللغة</string>
+    <string name="theme_label">المظهر</string>
+    <string name="theme_system">النظام</string>
+    <string name="theme_dark">داكن</string>
+    <string name="theme_light">فاتح</string>
+    <string name="language_label">اللغة</string>
+    <string name="lang_system">النظام</string>
+    <string name="error_log">سجل التشغيل والأخطاء</string>
+    <string name="btn_clear_log">مسح</string>
+    <string name="log_empty">السجل فاضي.</string>
+    <string name="notif_channel_name">خدمة MiniRepeater</string>
+    <string name="notif_title">MiniRepeater شغّال</string>
+    <string name="notif_text">بث %1$s (%2$d أجهزة متصلة)</string>
+    <string name="err_ssid_prefix">الاسم لازم يبدأ بـ DIRECT-XX- (مثلاً DIRECT-MR-WiFi)</string>
+    <string name="err_password_len">كلمة المرور لازم تكون 8 حروف أو أرقام على الأقل</string>
+    <string name="msg_pmf_done">تم تعديل PMF. اقفل الواي فاي وافتحه مرة واحدة.</string>
+    <string name="msg_pmf_fail">محتاج صلاحية الروت من Magisk أولاً.</string>
+    <string name="msg_grant_perm">وافق على إذن الموقع / الأجهزة القريبة أولاً.</string>
+</resources>

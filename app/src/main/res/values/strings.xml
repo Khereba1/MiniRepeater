@@ -1,0 +1,39 @@
+<resources>
+    <string name="app_name" translatable="false">MiniRepeater</string>
+    <string name="developer_name" translatable="false">Khereba1</string>
+    <string name="developer_label">Developer</string>
+    <string name="subtitle">Root Wi-Fi Repeater (Zero Proxy)</string>
+    <string name="status_running">Active</string>
+    <string name="status_starting">Starting…</string>
+    <string name="status_stopped">Stopped</string>
+    <string name="btn_start">Start Repeater</string>
+    <string name="btn_stop">Stop Repeater</string>
+    <string name="label_ssid">Network Name (DIRECT-XX-…)</string>
+    <string name="label_password">Password (min 8 chars)</string>
+    <string name="label_iface">Interface</string>
+    <string name="label_clients">Clients</string>
+    <string name="label_upstream">Upstream</string>
+    <string name="switch_autostart">Auto-start on boot</string>
+    <string name="btn_fix_pmf">Patch PMF (pmf=0 &amp; ch 6)</string>
+    <string name="section_config">Network Settings</string>
+    <string name="section_prefs">Appearance &amp; Language</string>
+    <string name="theme_label">Theme</string>
+    <string name="theme_system">System</string>
+    <string name="theme_dark">Dark</string>
+    <string name="theme_light">Light</string>
+    <string name="language_label">Language</string>
+    <string name="lang_system">System</string>
+    <string name="lang_arabic" translatable="false">العربية</string>
+    <string name="lang_english" translatable="false">English</string>
+    <string name="error_log">Activity &amp; Error Log</string>
+    <string name="btn_clear_log">Clear</string>
+    <string name="log_empty">No logs yet.</string>
+    <string name="notif_channel_name">MiniRepeater Service</string>
+    <string name="notif_title">MiniRepeater is active</string>
+    <string name="notif_text">Broadcasting %1$s (%2$d clients)</string>
+    <string name="err_ssid_prefix">Name must start with DIRECT-XX- (e.g. DIRECT-MR-WiFi)</string>
+    <string name="err_password_len">Password must be at least 8 characters</string>
+    <string name="msg_pmf_done">PMF patched. Toggle Wi-Fi off and on once.</string>
+    <string name="msg_pmf_fail">Root required (enable in Magisk Superuser).</string>
+    <string name="msg_grant_perm">Grant Location / Nearby Wi-Fi permissions first.</string>
+</resources>
