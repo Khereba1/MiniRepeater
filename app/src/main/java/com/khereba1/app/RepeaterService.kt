@@ -110,11 +110,19 @@ class RepeaterService : Service() {
             return
         }
 
-        val config = WifiP2pConfig.Builder()
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        @Suppress("DEPRECATION")
+        val routerFreq = wm?.connectionInfo?.frequency ?: 0
+        val configBuilder = WifiP2pConfig.Builder()
             .setNetworkName(ssid)
             .setPassphrase(pass)
-            .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
-            .build()
+        if (routerFreq in 2412..2462) {
+            configBuilder.setGroupOperatingFrequency(routerFreq)
+            AppLog.log("P2P", "Matching router 2.4GHz channel (${routerFreq}MHz)")
+        } else {
+            configBuilder.setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
+        }
+        val config = configBuilder.build()
 
         manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
@@ -201,8 +209,8 @@ class RepeaterService : Service() {
                     delay(500)
                 }
             } else {
-                // Give Android's Tethering service 1s to initialize p2p0 first
-                delay(1000)
+                // Give Android's Tethering service 1.5s to initialize p2p0 first
+                delay(1500)
             }
 
             val foundIface = iface
@@ -241,6 +249,10 @@ class RepeaterService : Service() {
                         if (!userStopped) startRepeater(isAutoRestart = true)
                     }
                     break
+                }
+                if (!RootRouter.ensureRoutingIntact(foundIface, activeUpstream)) {
+                    RootRouter.startRouting(foundIface, activeUpstream)
+                    AppLog.log("NET", "Routing rules restored automatically.")
                 }
                 val count = RootRouter.countClients(foundIface)
                 RepeaterState.update { it.copy(clients = count, iface = foundIface) }

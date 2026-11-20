@@ -53,17 +53,33 @@ object RootRouter {
             ip rule del pref 100 2>/dev/null
             ip rule add to $SUBNET lookup main pref 90
             ip rule add from $SUBNET lookup "$upstream" pref 100
-            iptables -t nat -C POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE
+            iptables -t nat -C POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE 2>/dev/null || iptables -t nat -I POSTROUTING 1 -s $SUBNET -o "$upstream" -j MASQUERADE
             iptables -t nat -C PREROUTING -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53
             iptables -t nat -C PREROUTING -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53
             iptables -C FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$iface" -o "$upstream" -j ACCEPT
             iptables -C FORWARD -i "$upstream" -o "$iface" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$upstream" -o "$iface" -j ACCEPT
             if [ -f "$PID_FILE" ]; then kill ${d}(cat "$PID_FILE") 2>/dev/null; rm -f "$PID_FILE"; fi
-            touch "$LEASE_FILE"
-            /system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1 || true
+            if ! pgrep dnsmasq >/dev/null 2>&1; then
+                touch "$LEASE_FILE"
+                /system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1 || true
+            fi
             echo "OK"
         """.trimIndent()
         return runRoot(cmd)
+    }
+
+    fun ensureRoutingIntact(iface: String, upstream: String): Boolean {
+        val d = '$'
+        val cmd = """
+            [ "${d}(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = "1" ] &&
+            ip rule list | grep -q "from $SUBNET lookup $upstream" &&
+            iptables -t nat -C PREROUTING -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null &&
+            iptables -t nat -C POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE 2>/dev/null &&
+            iptables -C FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null &&
+            echo "INTACT"
+        """.trimIndent()
+        val res = runRoot(cmd)
+        return res.exitCode == 0 && res.output.contains("INTACT")
     }
 
     fun stopRouting(iface: String?, upstream: String): ShellResult {
@@ -92,15 +108,6 @@ object RootRouter {
         val cmd = """ip neigh show dev "$iface" 2>/dev/null | grep -E 'REACHABLE|STALE|DELAY' | wc -l"""
         val res = runRoot(cmd)
         return res.output.trim().toIntOrNull() ?: 0
-    }
-
-    fun ensureDnsmasqAlive(iface: String): Boolean {
-        val d = '$'
-        val check = runRoot("""[ -f "$PID_FILE" ] && kill -0 ${d}(cat "$PID_FILE") 2>/dev/null && echo ALIVE""")
-        if (check.exitCode == 0 && check.output.contains("ALIVE")) return true
-        val cmd = """/system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1 || true"""
-        val start = runRoot(cmd)
-        return start.exitCode == 0
     }
 
     fun patchPmf(): ShellResult {
