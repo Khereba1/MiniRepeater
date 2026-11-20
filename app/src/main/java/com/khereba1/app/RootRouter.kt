@@ -54,6 +54,8 @@ object RootRouter {
             ip rule add to $SUBNET lookup main pref 90
             ip rule add from $SUBNET lookup "$upstream" pref 100
             iptables -t nat -C POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE
+            iptables -t nat -C PREROUTING -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53
+            iptables -t nat -C PREROUTING -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53
             iptables -C FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$iface" -o "$upstream" -j ACCEPT
             iptables -C FORWARD -i "$upstream" -o "$iface" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$upstream" -o "$iface" -j ACCEPT
             if [ -f "$PID_FILE" ]; then kill ${d}(cat "$PID_FILE") 2>/dev/null; rm -f "$PID_FILE"; fi
@@ -70,6 +72,8 @@ object RootRouter {
             """
                 iptables -D FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null
                 iptables -D FORWARD -i "$upstream" -o "$iface" -j ACCEPT 2>/dev/null
+                iptables -t nat -D PREROUTING -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null
+                iptables -t nat -D PREROUTING -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null
             """.trimIndent()
         } else ""
 
