@@ -31,8 +31,16 @@ object RootRouter {
     }
 
     fun findP2pInterface(): String? {
-        val res = runRoot("ip -o link | grep -oE 'p2p-[a-zA-Z0-9_-]+' | head -n 1")
-        return if (res.exitCode == 0 && res.output.isNotBlank()) res.output else null
+        val virt = runRoot("ip -o link | grep -oE 'p2p-[a-zA-Z0-9_-]+' | head -n 1")
+        if (virt.exitCode == 0 && virt.output.isNotBlank()) return virt.output
+        val direct = runRoot("ip -o link show dev p2p0 2>/dev/null | grep -E 'state UP|LOWER_UP' && echo p2p0")
+        if (direct.exitCode == 0 && direct.output.contains("p2p0")) return "p2p0"
+        return null
+    }
+
+    fun isInterfaceUp(iface: String): Boolean {
+        val res = runRoot("""ip -o link show dev "$iface" 2>/dev/null | grep -E 'state UP|LOWER_UP|UP'""")
+        return res.exitCode == 0 && res.output.isNotBlank()
     }
 
     fun startRouting(iface: String, upstream: String): ShellResult {
@@ -50,7 +58,7 @@ object RootRouter {
             iptables -C FORWARD -i "$upstream" -o "$iface" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$upstream" -o "$iface" -j ACCEPT
             if [ -f "$PID_FILE" ]; then kill ${d}(cat "$PID_FILE") 2>/dev/null; rm -f "$PID_FILE"; fi
             touch "$LEASE_FILE"
-            /system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1
+            /system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1 || true
             echo "OK"
         """.trimIndent()
         return runRoot(cmd)
@@ -86,7 +94,7 @@ object RootRouter {
         val d = '$'
         val check = runRoot("""[ -f "$PID_FILE" ] && kill -0 ${d}(cat "$PID_FILE") 2>/dev/null && echo ALIVE""")
         if (check.exitCode == 0 && check.output.contains("ALIVE")) return true
-        val cmd = """/system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1"""
+        val cmd = """/system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1 || true"""
         val start = runRoot(cmd)
         return start.exitCode == 0
     }
@@ -99,6 +107,7 @@ object RootRouter {
                 if [ -f "${d}f" ]; then
                     FOUND=1
                     sed -i 's/^pmf=1/pmf=0/; s/^p2p_oper_reg_class=.*/p2p_oper_reg_class=81/; s/^p2p_oper_channel=.*/p2p_oper_channel=6/' "${d}f"
+                    grep -q '^p2p_no_group_iface=' "${d}f" && sed -i 's/^p2p_no_group_iface=.*/p2p_no_group_iface=1/' "${d}f" || sed -i '2i p2p_no_group_iface=1' "${d}f"
                 fi
             done
             if [ "${d}FOUND" = "1" ]; then echo "PATCHED"; else echo "NO_FILE"; fi

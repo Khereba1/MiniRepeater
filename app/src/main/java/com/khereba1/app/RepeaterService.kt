@@ -91,7 +91,7 @@ class RepeaterService : Service() {
             }
             AppLog.log("P2P", "Starting group: $ssid")
         } else {
-            AppLog.log("P2P", "Idle timeout detected; auto-restarting $ssid...")
+            AppLog.log("P2P", "Interface dropped; auto-restarting $ssid...")
         }
 
         val manager = p2pManager
@@ -157,7 +157,7 @@ class RepeaterService : Service() {
                         }
 
                         override fun onFailure(fallbackReason: Int) {
-                            AppLog.log("P2P", "Fallback createGroup failed (reason=$fallbackReason). Check Wi-Fi & Location ON.")
+                            AppLog.log("P2P", "Fallback createGroup failed (reason=$fallbackReason).")
                             stopRepeater()
                         }
                     })
@@ -172,30 +172,37 @@ class RepeaterService : Service() {
         channel: WifiP2pManager.Channel
     ) {
         manager.requestGroupInfo(channel) { group ->
+            var groupIface: String? = null
             if (group != null) {
                 val realSsid = group.networkName ?: activeSsid
                 val realPass = group.passphrase ?: ""
+                groupIface = group.`interface`
                 activeSsid = realSsid
                 if (realPass.isNotBlank()) {
-                    AppLog.log("P2P", "SSID: $realSsid | Pass: $realPass")
+                    AppLog.log("P2P", "SSID: $realSsid | Pass: $realPass | Iface: ${groupIface ?: "auto"}")
                 } else {
-                    AppLog.log("P2P", "SSID: $realSsid")
+                    AppLog.log("P2P", "SSID: $realSsid | Iface: ${groupIface ?: "auto"}")
                 }
                 RepeaterState.update { it.copy(ssid = realSsid) }
                 updateNotification(realSsid, 0)
             }
+            configureRoutingAsync(groupIface)
         }
-        configureRoutingAsync()
     }
 
-    private fun configureRoutingAsync() {
+    private fun configureRoutingAsync(hintIface: String?) {
         watchdogJob?.cancel()
         watchdogJob = scope.launch {
-            var iface: String? = null
-            repeat(12) {
-                iface = RootRouter.findP2pInterface()
-                if (!iface.isNullOrBlank()) return@repeat
-                delay(500)
+            var iface: String? = hintIface?.takeIf { it.isNotBlank() }
+            if (iface == null) {
+                repeat(12) {
+                    iface = RootRouter.findP2pInterface()
+                    if (!iface.isNullOrBlank()) return@repeat
+                    delay(500)
+                }
+            } else {
+                // Give Android's Tethering service 1s to initialize p2p0 first
+                delay(1000)
             }
 
             val foundIface = iface
@@ -228,22 +235,15 @@ class RepeaterService : Service() {
             while (isActive && !userStopped) {
                 delay(8000)
                 if (userStopped) break
-                val currentIface = RootRouter.findP2pInterface()
-                if (currentIface.isNullOrBlank()) {
-                    // Android 2-minute P2P idle timeout: auto-recreate group seamlessly
+                val alive = RootRouter.isInterfaceUp(foundIface)
+                if (!alive) {
                     scope.launch(Dispatchers.Main) {
                         if (!userStopped) startRepeater(isAutoRestart = true)
                     }
                     break
                 }
-                if (currentIface != activeIface) {
-                    activeIface = currentIface
-                    RootRouter.startRouting(currentIface, activeUpstream)
-                } else {
-                    RootRouter.ensureDnsmasqAlive(currentIface)
-                }
-                val count = RootRouter.countClients(currentIface)
-                RepeaterState.update { it.copy(clients = count, iface = currentIface) }
+                val count = RootRouter.countClients(foundIface)
+                RepeaterState.update { it.copy(clients = count, iface = foundIface) }
                 updateNotification(activeSsid, count)
             }
         }
