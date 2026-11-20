@@ -9,6 +9,7 @@ object RootRouter {
     const val GATEWAY_IP = "192.168.49.1"
     const val SUBNET = "192.168.49.0/24"
     const val LEASE_FILE = "/data/local/tmp/minirepeater_dhcp.leases"
+    const val PID_FILE = "/data/local/tmp/minirepeater_dnsmasq.pid"
 
     fun runRoot(script: String): ShellResult {
         return try {
@@ -35,6 +36,7 @@ object RootRouter {
     }
 
     fun startRouting(iface: String, upstream: String): ShellResult {
+        val d = '$'
         val cmd = """
             ip addr replace $GATEWAY_IP/24 dev "$iface"
             ip link set "$iface" up
@@ -46,15 +48,16 @@ object RootRouter {
             iptables -t nat -C POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE
             iptables -C FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$iface" -o "$upstream" -j ACCEPT
             iptables -C FORWARD -i "$upstream" -o "$iface" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$upstream" -o "$iface" -j ACCEPT
-            pkill -f "$LEASE_FILE" 2>/dev/null
+            if [ -f "$PID_FILE" ]; then kill ${d}(cat "$PID_FILE") 2>/dev/null; rm -f "$PID_FILE"; fi
             touch "$LEASE_FILE"
-            /system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE"
+            /system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE"
             echo "OK"
         """.trimIndent()
         return runRoot(cmd)
     }
 
     fun stopRouting(iface: String?, upstream: String): ShellResult {
+        val d = '$'
         val ifaceCleanup = if (!iface.isNullOrBlank()) {
             """
                 iptables -D FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null
@@ -63,7 +66,7 @@ object RootRouter {
         } else ""
 
         val cmd = """
-            pkill -f "$LEASE_FILE" 2>/dev/null
+            if [ -f "$PID_FILE" ]; then kill ${d}(cat "$PID_FILE") 2>/dev/null; rm -f "$PID_FILE"; fi
             ip rule del pref 90 2>/dev/null
             ip rule del pref 100 2>/dev/null
             iptables -t nat -D POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE 2>/dev/null
@@ -80,9 +83,10 @@ object RootRouter {
     }
 
     fun ensureDnsmasqAlive(iface: String): Boolean {
-        val check = runRoot("pgrep -f '$LEASE_FILE'")
-        if (check.exitCode == 0 && check.output.isNotBlank()) return true
-        val cmd = """/system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" """.trim()
+        val d = '$'
+        val check = runRoot("""[ -f "$PID_FILE" ] && kill -0 ${d}(cat "$PID_FILE") 2>/dev/null && echo ALIVE""")
+        if (check.exitCode == 0 && check.output.contains("ALIVE")) return true
+        val cmd = """/system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" """.trim()
         val start = runRoot(cmd)
         return start.exitCode == 0
     }
