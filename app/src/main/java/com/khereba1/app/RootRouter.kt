@@ -92,15 +92,16 @@ object RootRouter {
     }
 
     fun patchPmf(): ShellResult {
+        val d = '$'
         val cmd = """
             FOUND=0
             for f in /data/vendor/wifi/wpa/p2p_supplicant.conf /data/misc/wifi/p2p_supplicant.conf; do
-                if [ -f "$f" ]; then
+                if [ -f "${d}f" ]; then
                     FOUND=1
-                    sed -i 's/^pmf=1/pmf=0/; s/^p2p_oper_reg_class=.*/p2p_oper_reg_class=81/; s/^p2p_oper_channel=.*/p2p_oper_channel=6/' "$f"
+                    sed -i 's/^pmf=1/pmf=0/; s/^p2p_oper_reg_class=.*/p2p_oper_reg_class=81/; s/^p2p_oper_channel=.*/p2p_oper_channel=6/' "${d}f"
                 fi
             done
-            if [ "$FOUND" = "1" ]; then echo "PATCHED"; else echo "NO_FILE"; fi
+            if [ "${d}FOUND" = "1" ]; then echo "PATCHED"; else echo "NO_FILE"; fi
         """.trimIndent()
         return runRoot(cmd)
     }
