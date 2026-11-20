@@ -9,6 +9,7 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.location.LocationManager
 import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pManager
@@ -62,6 +63,11 @@ class RepeaterService : Service() {
         return START_STICKY
     }
 
+    private fun isLocationEnabled(): Boolean {
+        val lm = getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return true
+        return lm.isLocationEnabled
+    }
+
     @SuppressLint("MissingPermission")
     private fun startRepeater() {
         val ssid = Prefs.getSsid(this)
@@ -77,6 +83,11 @@ class RepeaterService : Service() {
 
         acquireLocks()
         RepeaterState.update { it.copy(status = ServiceStatus.STARTING, ssid = ssid) }
+
+        if (!isLocationEnabled()) {
+            AppLog.log("P2P", "Warning: Location is OFF — turn Location ON if P2P fails.")
+        }
+
         AppLog.log("P2P", "Starting group: $ssid")
 
         val manager = p2pManager
@@ -99,36 +110,83 @@ class RepeaterService : Service() {
             .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
             .build()
 
+        // Remove any stale group, then wait 700ms so WifiP2pService is not BUSY (reason=2)
         manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() = createGroupNow(manager, channel, config)
-            override fun onFailure(reason: Int) = createGroupNow(manager, channel, config)
+            override fun onSuccess() {
+                scope.launch(Dispatchers.Main) {
+                    delay(700)
+                    createGroupWithFallback(manager, channel, config)
+                }
+            }
+
+            override fun onFailure(reason: Int) {
+                scope.launch(Dispatchers.Main) {
+                    delay(700)
+                    createGroupWithFallback(manager, channel, config)
+                }
+            }
         })
     }
 
     @SuppressLint("MissingPermission")
-    private fun createGroupNow(
+    private fun createGroupWithFallback(
         manager: WifiP2pManager,
         channel: WifiP2pManager.Channel,
         config: WifiP2pConfig
     ) {
         manager.createGroup(channel, config, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
-                AppLog.log("P2P", "Group created; starting root NAT & DHCP...")
-                configureRoutingAsync()
+                AppLog.log("P2P", "Custom group created ($activeSsid).")
+                requestGroupDetailsAndRoute(manager, channel)
             }
 
             override fun onFailure(reason: Int) {
-                AppLog.log("P2P", "createGroup failed (reason=$reason)")
-                stopRepeater()
+                AppLog.log("P2P", "Custom config failed (reason=$reason); trying system P2P group...")
+                scope.launch(Dispatchers.Main) {
+                    delay(900)
+                    manager.createGroup(channel, object : WifiP2pManager.ActionListener {
+                        override fun onSuccess() {
+                            AppLog.log("P2P", "System P2P group created.")
+                            requestGroupDetailsAndRoute(manager, channel)
+                        }
+
+                        override fun onFailure(fallbackReason: Int) {
+                            AppLog.log("P2P", "Fallback createGroup failed (reason=$fallbackReason). Check Wi-Fi & Location ON.")
+                            stopRepeater()
+                        }
+                    })
+                }
             }
         })
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestGroupDetailsAndRoute(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel
+    ) {
+        manager.requestGroupInfo(channel) { group ->
+            if (group != null) {
+                val realSsid = group.networkName ?: activeSsid
+                val realPass = group.passphrase ?: ""
+                activeSsid = realSsid
+                if (realPass.isNotBlank()) {
+                    AppLog.log("P2P", "SSID: $realSsid | Pass: $realPass")
+                } else {
+                    AppLog.log("P2P", "SSID: $realSsid")
+                }
+                RepeaterState.update { it.copy(ssid = realSsid) }
+                updateNotification(realSsid, 0)
+            }
+        }
+        configureRoutingAsync()
     }
 
     private fun configureRoutingAsync() {
         watchdogJob?.cancel()
         watchdogJob = scope.launch {
             var iface: String? = null
-            repeat(10) {
+            repeat(12) {
                 iface = RootRouter.findP2pInterface()
                 if (!iface.isNullOrBlank()) return@repeat
                 delay(500)
