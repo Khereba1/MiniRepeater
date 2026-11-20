@@ -241,7 +241,7 @@ class RepeaterService : Service() {
             }
 
             while (isActive && !userStopped) {
-                delay(8000)
+                delay(30000)
                 if (userStopped) break
                 val alive = RootRouter.isInterfaceUp(foundIface)
                 if (!alive) {
@@ -250,9 +250,10 @@ class RepeaterService : Service() {
                     }
                     break
                 }
-                if (!RootRouter.ensureRoutingIntact(foundIface, activeUpstream)) {
+                val issue = RootRouter.checkRoutingHealth(foundIface, activeUpstream)
+                if (issue != null) {
                     RootRouter.startRouting(foundIface, activeUpstream)
-                    AppLog.log("NET", "Routing rules restored automatically.")
+                    AppLog.log("NET", "Routing rules restored ($issue).")
                 }
                 val count = RootRouter.countClients(foundIface)
                 RepeaterState.update { it.copy(clients = count, iface = foundIface) }

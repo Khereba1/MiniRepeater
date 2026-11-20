@@ -68,18 +68,20 @@ object RootRouter {
         return runRoot(cmd)
     }
 
-    fun ensureRoutingIntact(iface: String, upstream: String): Boolean {
+    /** Returns null if intact, or a short reason tag if a rule is missing. */
+    fun checkRoutingHealth(iface: String, upstream: String): String? {
         val d = '$'
         val cmd = """
-            [ "${d}(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = "1" ] &&
-            ip rule list | grep -q "from $SUBNET lookup $upstream" &&
-            iptables -t nat -C PREROUTING -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null &&
-            iptables -t nat -C POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE 2>/dev/null &&
-            iptables -C FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null &&
+            if [ "${d}(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" != "1" ]; then echo "NO_FWD"; exit 0; fi
+            if ! ip rule list | grep -q "$SUBNET"; then echo "NO_RULE"; exit 0; fi
+            if ! iptables -t nat -S PREROUTING 2>/dev/null | grep -q "8.8.8.8:53"; then echo "NO_DNS"; exit 0; fi
+            if ! iptables -t nat -S POSTROUTING 2>/dev/null | grep -q "$SUBNET"; then echo "NO_NAT"; exit 0; fi
+            if ! iptables -S FORWARD 2>/dev/null | grep -q -- "-i $iface -o $upstream"; then echo "NO_IPT"; exit 0; fi
             echo "INTACT"
         """.trimIndent()
         val res = runRoot(cmd)
-        return res.exitCode == 0 && res.output.contains("INTACT")
+        if (res.output.contains("INTACT")) return null
+        return res.output.ifBlank { "UNKNOWN" }
     }
 
     fun stopRouting(iface: String?, upstream: String): ShellResult {

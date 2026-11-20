@@ -14,8 +14,8 @@ android {
         applicationId = "com.khereba1.minirepeater"
         minSdk = 29
         targetSdk = 34
-        versionCode = 11
-        versionName = "1.1.2"
+        versionCode = 12
+        versionName = "1.1.3"
     }
 
     // Stable signing: when the env vars exist (GitHub Secrets) the release is signed with the fixed key,
