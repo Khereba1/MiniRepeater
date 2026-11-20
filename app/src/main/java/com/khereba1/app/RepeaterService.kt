@@ -31,12 +31,14 @@ class RepeaterService : Service() {
     companion object {
         const val ACTION_START = "com.khereba1.minirepeater.START"
         const val ACTION_STOP = "com.khereba1.minirepeater.STOP"
+        const val EXTRA_FROM_BOOT = "from_boot"
         private const val CHANNEL_ID = "minirepeater_channel"
         private const val NOTIF_ID = 1001
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var watchdogJob: Job? = null
+    private var bootWaitJob: Job? = null
 
     private var p2pManager: WifiP2pManager? = null
     private var p2pChannel: WifiP2pManager.Channel? = null
@@ -60,9 +62,54 @@ class RepeaterService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopRepeater()
-            else -> startRepeater(isAutoRestart = false)
+            else -> {
+                val fromBoot = intent?.getBooleanExtra(EXTRA_FROM_BOOT, false) ?: false
+                if (fromBoot) {
+                    startAfterBootWifiWait()
+                } else {
+                    startRepeater(isAutoRestart = false)
+                }
+            }
         }
         return START_STICKY
+    }
+
+    private fun startAfterBootWifiWait() {
+        userStopped = false
+        val ssid = Prefs.getSsid(this)
+        activeSsid = ssid
+        val notif = buildNotification(ssid, 0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } else {
+            startForeground(NOTIF_ID, notif)
+        }
+        acquireLocks()
+        RepeaterState.update { it.copy(status = ServiceStatus.STARTING, ssid = ssid) }
+        AppLog.log("BOOT", "Waiting for Wi-Fi (wlan0) after boot...")
+
+        bootWaitJob?.cancel()
+        bootWaitJob = scope.launch {
+            var wifiReady = false
+            repeat(22) {
+                if (userStopped) return@launch
+                val res = RootRouter.runRoot("ip -o -4 addr show dev wlan0 2>/dev/null")
+                if (res.exitCode == 0 && res.output.contains("inet ")) {
+                    wifiReady = true
+                    return@repeat
+                }
+                delay(2000)
+            }
+            if (userStopped) return@launch
+            if (wifiReady) {
+                delay(2000)
+            } else {
+                AppLog.log("BOOT", "Wi-Fi not ready after 44s; starting group anyway.")
+            }
+            scope.launch(Dispatchers.Main) {
+                if (!userStopped) startRepeater(isAutoRestart = false)
+            }
+        }
     }
 
     private fun isLocationEnabled(): Boolean {
@@ -191,10 +238,39 @@ class RepeaterService : Service() {
                 } else {
                     AppLog.log("P2P", "SSID: $realSsid | Iface: ${groupIface ?: "auto"}")
                 }
-                RepeaterState.update { it.copy(ssid = realSsid) }
-                updateNotification(realSsid, 0)
+                RepeaterState.update { it.copy(ssid = realSsid, clients = group.clientList?.size ?: 0) }
+                updateNotification(realSsid, group.clientList?.size ?: 0)
             }
             configureRoutingAsync(groupIface)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun refreshClientCount(iface: String) {
+        val manager = p2pManager
+        val channel = p2pChannel
+        if (manager != null && channel != null) {
+            scope.launch(Dispatchers.Main) {
+                if (userStopped) return@launch
+                manager.requestGroupInfo(channel) { group ->
+                    if (userStopped) return@requestGroupInfo
+                    if (group != null) {
+                        val count = group.clientList?.size ?: 0
+                        RepeaterState.update { it.copy(clients = count, iface = iface) }
+                        updateNotification(activeSsid, count)
+                    } else {
+                        scope.launch(Dispatchers.IO) {
+                            val count = RootRouter.countClients(iface)
+                            RepeaterState.update { it.copy(clients = count, iface = iface) }
+                            updateNotification(activeSsid, count)
+                        }
+                    }
+                }
+            }
+        } else {
+            val count = RootRouter.countClients(iface)
+            RepeaterState.update { it.copy(clients = count, iface = iface) }
+            updateNotification(activeSsid, count)
         }
     }
 
@@ -239,6 +315,7 @@ class RepeaterService : Service() {
                     ssid = activeSsid
                 )
             }
+            refreshClientCount(foundIface)
 
             while (isActive && !userStopped) {
                 delay(30000)
@@ -255,9 +332,7 @@ class RepeaterService : Service() {
                     RootRouter.startRouting(foundIface, activeUpstream)
                     AppLog.log("NET", "Routing rules restored ($issue).")
                 }
-                val count = RootRouter.countClients(foundIface)
-                RepeaterState.update { it.copy(clients = count, iface = foundIface) }
-                updateNotification(activeSsid, count)
+                refreshClientCount(foundIface)
             }
         }
     }
@@ -265,6 +340,8 @@ class RepeaterService : Service() {
     @SuppressLint("MissingPermission")
     private fun stopRepeater() {
         userStopped = true
+        bootWaitJob?.cancel()
+        bootWaitJob = null
         watchdogJob?.cancel()
         watchdogJob = null
 
@@ -354,6 +431,7 @@ class RepeaterService : Service() {
 
     override fun onDestroy() {
         userStopped = true
+        bootWaitJob?.cancel()
         watchdogJob?.cancel()
         releaseLocks()
         scope.cancel()

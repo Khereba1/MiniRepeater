@@ -107,7 +107,8 @@ object RootRouter {
     }
 
     fun countClients(iface: String): Int {
-        val cmd = """ip neigh show dev "$iface" 2>/dev/null | grep -E 'REACHABLE|STALE|DELAY' | wc -l"""
+        val d = '$'
+        val cmd = """ip -4 neigh show dev "$iface" 2>/dev/null | grep -E 'REACHABLE|DELAY|PROBE' | awk '{print ${d}5}' | sort -u | wc -l"""
         val res = runRoot(cmd)
         return res.output.trim().toIntOrNull() ?: 0
     }

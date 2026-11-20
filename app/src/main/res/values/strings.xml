@@ -1,33 +1,31 @@
 <resources>
     <string name="app_name" translatable="false">MiniRepeater</string>
     <string name="developer_name" translatable="false">Khereba1</string>
-    <string name="developer_label">Developer</string>
-    <string name="subtitle">Root Wi-Fi Repeater (Zero Proxy)</string>
+    <string name="footer_version" translatable="false">MiniRepeater v1.2.0 • Khereba1</string>
+    <string name="subtitle">Root Wi-Fi Repeater</string>
     <string name="status_running">Active</string>
     <string name="status_starting">Starting…</string>
     <string name="status_stopped">Stopped</string>
+    <string name="badge_band">2.4 GHz • Auto</string>
     <string name="btn_start">Start Repeater</string>
     <string name="btn_stop">Stop Repeater</string>
-    <string name="label_ssid">Network Name (DIRECT-XX-…)</string>
+    <string name="label_ssid">Network Name (SSID)</string>
     <string name="label_password">Password (min 8 chars)</string>
     <string name="label_iface">Interface</string>
     <string name="label_clients">Clients</string>
     <string name="label_upstream">Upstream</string>
     <string name="switch_autostart">Auto-start on boot</string>
-    <string name="btn_fix_pmf">Patch PMF (pmf=0 &amp; ch 6)</string>
     <string name="section_config">Network Settings</string>
-    <string name="section_prefs">Appearance &amp; Language</string>
-    <string name="theme_label">Theme</string>
-    <string name="theme_system">System</string>
-    <string name="theme_dark">Dark</string>
-    <string name="theme_light">Light</string>
-    <string name="language_label">Language</string>
-    <string name="lang_system">System</string>
-    <string name="lang_arabic" translatable="false">العربية</string>
-    <string name="lang_english" translatable="false">English</string>
-    <string name="error_log">Activity &amp; Error Log</string>
+    <string name="section_advanced">Advanced (Device Compatibility)</string>
+    <string name="btn_fix_pmf">Patch PMF (pmf=0 &amp; ch 6)</string>
+    <string name="hint_pmf">Run once on older Broadcom / LineageOS devices if clients fail to connect or drop after 2 minutes.</string>
+    <string name="error_log">Activity Log</string>
+    <string name="btn_copy">Copy</string>
+    <string name="btn_show">Show</string>
+    <string name="btn_hide">Hide</string>
     <string name="btn_clear_log">Clear</string>
     <string name="log_empty">No logs yet.</string>
+    <string name="msg_copied">Copied to clipboard</string>
     <string name="notif_channel_name">MiniRepeater Service</string>
     <string name="notif_title">MiniRepeater is active</string>
     <string name="notif_text">Broadcasting %1$s (%2$d clients)</string>

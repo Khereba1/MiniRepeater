@@ -1,6 +1,8 @@
 package com.khereba1.app
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -12,10 +14,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,6 +36,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -54,6 +60,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -62,20 +71,21 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val DarkPalette = darkColorScheme(
-    primary = Color(0xFF14B8A6),
-    onPrimary = Color(0xFF042F2E),
-    background = Color(0xFF0B1120),
-    onBackground = Color(0xFFF8FAFC),
-    surface = Color(0xFF111827),
-    onSurface = Color(0xFFF8FAFC),
-    surfaceVariant = Color(0xFF1E293B),
+    primary = Color(0xFF2DD4BF),
+    onPrimary = Color(0xFF062825),
+    background = Color(0xFF0F1419),
+    onBackground = Color(0xFFF1F5F9),
+    surface = Color(0xFF161D24),
+    onSurface = Color(0xFFF1F5F9),
+    surfaceVariant = Color(0xFF1C252E),
     onSurfaceVariant = Color(0xFF94A3B8),
-    outline = Color(0xFF273449),
-    error = Color(0xFFEF4444)
+    outline = Color(0xFF25303B),
+    error = Color(0xFFE06C75),
+    onError = Color(0xFFFFFFFF)
 )
 
 private val LightPalette = lightColorScheme(
-    primary = Color(0xFF0D9488),
+    primary = Color(0xFF0F766E),
     onPrimary = Color(0xFFFFFFFF),
     background = Color(0xFFF8FAFC),
     onBackground = Color(0xFF0F172A),
@@ -84,7 +94,8 @@ private val LightPalette = lightColorScheme(
     surfaceVariant = Color(0xFFF1F5F9),
     onSurfaceVariant = Color(0xFF475569),
     outline = Color(0xFFE2E8F0),
-    error = Color(0xFFDC2626)
+    error = Color(0xFFDC2626),
+    onError = Color(0xFFFFFFFF)
 )
 
 class MainActivity : ComponentActivity() {
@@ -99,20 +110,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(LocaleHelper.wrap(newBase))
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            var themePref by remember { mutableStateOf(Prefs.getTheme(this)) }
-            val dark = when (themePref) {
-                "dark" -> true
-                "light" -> false
-                else -> isSystemInDarkTheme()
-            }
-
+            val dark = isSystemInDarkTheme()
             MaterialTheme(colorScheme = if (dark) DarkPalette else LightPalette) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -120,15 +121,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     MiniRepeaterScreen(
                         context = this,
-                        themePref = themePref,
-                        onThemeChange = { newTheme ->
-                            themePref = newTheme
-                            Prefs.saveTheme(this, newTheme)
-                        },
-                        onLangChange = { newLang ->
-                            Prefs.saveLang(this, newLang)
-                            recreate()
-                        },
+                        darkTheme = dark,
                         onStartRequest = { ensurePermissionsAndStart() },
                         onStopRequest = { stopRepeaterService() }
                     )
@@ -168,12 +161,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private fun copyToClipboard(context: Context, label: String, text: String, toastMsg: String) {
+    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return
+    cm.setPrimaryClip(ClipData.newPlainText(label, text))
+    Toast.makeText(context, toastMsg, Toast.LENGTH_SHORT).show()
+}
+
 @Composable
 private fun MiniRepeaterScreen(
     context: Context,
-    themePref: String,
-    onThemeChange: (String) -> Unit,
-    onLangChange: (String) -> Unit,
+    darkTheme: Boolean,
     onStartRequest: () -> Unit,
     onStopRequest: () -> Unit
 ) {
@@ -183,6 +180,8 @@ private fun MiniRepeaterScreen(
     var ssid by remember { mutableStateOf(Prefs.getSsid(context)) }
     var password by remember { mutableStateOf(Prefs.getPassword(context)) }
     var autoStart by remember { mutableStateOf(Prefs.isAutoStart(context)) }
+    var passVisible by remember { mutableStateOf(false) }
+    var advExpanded by remember { mutableStateOf(false) }
     var ssidError by remember { mutableStateOf<String?>(null) }
     var passError by remember { mutableStateOf<String?>(null) }
 
@@ -190,6 +189,7 @@ private fun MiniRepeaterScreen(
     val errPassMsg = stringResource(R.string.err_password_len)
     val pmfDoneMsg = stringResource(R.string.msg_pmf_done)
     val pmfFailMsg = stringResource(R.string.msg_pmf_fail)
+    val copiedMsg = stringResource(R.string.msg_copied)
 
     val isActive = uiState.status == ServiceStatus.RUNNING || uiState.status == ServiceStatus.STARTING
     val statusText = when (uiState.status) {
@@ -197,250 +197,364 @@ private fun MiniRepeaterScreen(
         ServiceStatus.STARTING -> stringResource(R.string.status_starting)
         ServiceStatus.STOPPED -> stringResource(R.string.status_stopped)
     }
-    val dotColor = when (uiState.status) {
+    val badgeColor = when (uiState.status) {
         ServiceStatus.RUNNING -> MaterialTheme.colorScheme.primary
         ServiceStatus.STARTING -> Color(0xFFF59E0B)
         ServiceStatus.STOPPED -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val badgeBg = when (uiState.status) {
+        ServiceStatus.RUNNING -> MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        ServiceStatus.STARTING -> Color(0xFFF59E0B).copy(alpha = 0.15f)
+        ServiceStatus.STOPPED -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val logBg = if (darkTheme) Color(0xFF0B1015) else MaterialTheme.colorScheme.surfaceVariant
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+            .padding(horizontal = 18.dp, vertical = 20.dp),
+        contentAlignment = Alignment.TopCenter
     ) {
-        // Header
-        Column {
-            Text(
-                text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                text = stringResource(R.string.subtitle),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        // Status Card
-        FlatCard {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .clip(CircleShape)
-                        .background(dotColor)
-                )
-                Spacer(modifier = Modifier.size(10.dp))
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Spacer(modifier = Modifier.height(14.dp))
-
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .widthIn(max = 560.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Top Header with inline status badge
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                StatCell(stringResource(R.string.label_iface), uiState.iface)
-                StatCell(stringResource(R.string.label_upstream), uiState.upstream)
-                StatCell(stringResource(R.string.label_clients), uiState.clients.toString())
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Button(
-                onClick = {
-                    if (isActive) {
-                        onStopRequest()
-                    } else {
-                        val cleanSsid = ssid.trim()
-                        val cleanPass = password.trim()
-                        val validSsid = Regex("^DIRECT-[A-Za-z0-9]{2}-.+").matches(cleanSsid)
-                        val validPass = cleanPass.length >= 8
-                        ssidError = if (validSsid) null else errSsidMsg
-                        passError = if (validPass) null else errPassMsg
-                        if (validSsid && validPass) {
-                            Prefs.saveSsid(context, cleanSsid)
-                            Prefs.savePassword(context, cleanPass)
-                            onStartRequest()
-                        }
-                    }
-                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(50.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Text(
-                    text = if (isActive) stringResource(R.string.btn_stop) else stringResource(R.string.btn_start),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-            }
-        }
-
-        // Network Settings Card
-        FlatCard {
-            Text(
-                text = stringResource(R.string.section_config),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(10.dp))
-
-            OutlinedTextField(
-                value = ssid,
-                onValueChange = { ssid = it; ssidError = null },
-                enabled = !isActive,
-                singleLine = true,
-                label = { Text(stringResource(R.string.label_ssid)) },
-                isError = ssidError != null,
-                supportingText = ssidError?.let { msg -> { Text(msg) } },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it; passError = null },
-                enabled = !isActive,
-                singleLine = true,
-                label = { Text(stringResource(R.string.label_password)) },
-                isError = passError != null,
-                supportingText = passError?.let { msg -> { Text(msg) } },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
-            )
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
+                    .padding(horizontal = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text(
-                    text = stringResource(R.string.switch_autostart),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Switch(
-                    checked = autoStart,
-                    onCheckedChange = {
-                        autoStart = it
-                        Prefs.saveAutoStart(context, it)
-                    }
-                )
-            }
+                Column {
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = stringResource(R.string.subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        val res = withContext(Dispatchers.IO) { RootRouter.patchPmf() }
-                        if (res.exitCode == 0 && res.output.contains("PATCHED")) {
-                            AppLog.log("PMF", "Patched p2p_supplicant.conf (pmf=0, ch=6)")
-                            Toast.makeText(context, pmfDoneMsg, Toast.LENGTH_LONG).show()
-                        } else {
-                            AppLog.log("PMF", "Patch result: ${res.output}")
-                            Toast.makeText(context, pmfFailMsg, Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp)
-            ) {
-                Text(stringResource(R.string.btn_fix_pmf))
-            }
-        }
-
-        // Theme & Language Card
-        FlatCard {
-            Text(
-                text = stringResource(R.string.section_prefs),
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = stringResource(R.string.theme_label),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChoiceChipButton(stringResource(R.string.theme_system), themePref == "system") { onThemeChange("system") }
-                ChoiceChipButton(stringResource(R.string.theme_dark), themePref == "dark") { onThemeChange("dark") }
-                ChoiceChipButton(stringResource(R.string.theme_light), themePref == "light") { onThemeChange("light") }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
-            Text(
-                text = stringResource(R.string.language_label),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            val curLang = Prefs.getLang(context)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ChoiceChipButton(stringResource(R.string.lang_system), curLang == "system") { onLangChange("system") }
-                ChoiceChipButton(stringResource(R.string.lang_arabic), curLang == "ar") { onLangChange("ar") }
-                ChoiceChipButton(stringResource(R.string.lang_english), curLang == "en") { onLangChange("en") }
-            }
-        }
-
-        // Logs Card
-        FlatCard {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = stringResource(R.string.error_log),
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                )
-                TextButton(onClick = { AppLog.clear() }) {
-                    Text(stringResource(R.string.btn_clear_log))
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(999.dp))
+                        .background(badgeBg)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(badgeColor)
+                    )
+                    Text(
+                        text = statusText,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = badgeColor
+                    )
                 }
             }
-            val logBody = if (uiState.logs.isEmpty()) {
-                stringResource(R.string.log_empty)
-            } else {
-                uiState.logs.joinToString("\n")
+
+            // Hero Control Card
+            FlatCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = uiState.ssid.ifBlank { ssid.ifBlank { "DIRECT-MR-WiFi" } },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = stringResource(R.string.badge_band),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    StatBox(
+                        label = stringResource(R.string.label_clients),
+                        value = uiState.clients.toString(),
+                        modifier = Modifier.weight(1f)
+                    )
+                    StatBox(
+                        label = stringResource(R.string.label_iface),
+                        value = uiState.iface,
+                        modifier = Modifier.weight(1f)
+                    )
+                    StatBox(
+                        label = stringResource(R.string.label_upstream),
+                        value = uiState.upstream,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Button(
+                    onClick = {
+                        if (isActive) {
+                            onStopRequest()
+                        } else {
+                            val cleanSsid = ssid.trim()
+                            val cleanPass = password.trim()
+                            val validSsid = Regex("^DIRECT-[A-Za-z0-9]{2}-.+").matches(cleanSsid)
+                            val validPass = cleanPass.length >= 8
+                            ssidError = if (validSsid) null else errSsidMsg
+                            passError = if (validPass) null else errPassMsg
+                            if (validSsid && validPass) {
+                                Prefs.saveSsid(context, cleanSsid)
+                                Prefs.savePassword(context, cleanPass)
+                                onStartRequest()
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isActive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                        contentColor = if (isActive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onPrimary
+                    )
+                ) {
+                    Text(
+                        text = if (isActive) stringResource(R.string.btn_stop) else stringResource(R.string.btn_start),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 15.sp
+                    )
+                }
             }
+
+            // Network Settings Card
+            FlatCard {
+                Text(
+                    text = stringResource(R.string.section_config),
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = ssid,
+                    onValueChange = { ssid = it; ssidError = null },
+                    enabled = !isActive,
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.label_ssid)) },
+                    trailingIcon = {
+                        TextButton(
+                            onClick = { copyToClipboard(context, "SSID", ssid.trim(), copiedMsg) },
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text(stringResource(R.string.btn_copy), fontSize = 12.sp)
+                        }
+                    },
+                    isError = ssidError != null,
+                    supportingText = ssidError?.let { msg -> { Text(msg) } },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it; passError = null },
+                    enabled = !isActive,
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.label_password)) },
+                    visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            TextButton(
+                                onClick = { passVisible = !passVisible },
+                                contentPadding = PaddingValues(horizontal = 6.dp)
+                            ) {
+                                Text(
+                                    text = if (passVisible) stringResource(R.string.btn_hide) else stringResource(R.string.btn_show),
+                                    fontSize = 12.sp
+                                )
+                            }
+                            TextButton(
+                                onClick = { copyToClipboard(context, "Password", password.trim(), copiedMsg) },
+                                contentPadding = PaddingValues(horizontal = 6.dp)
+                            ) {
+                                Text(stringResource(R.string.btn_copy), fontSize = 12.sp)
+                            }
+                        }
+                    },
+                    isError = passError != null,
+                    supportingText = passError?.let { msg -> { Text(msg) } },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.switch_autostart),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Switch(
+                        checked = autoStart,
+                        onCheckedChange = {
+                            autoStart = it
+                            Prefs.saveAutoStart(context, it)
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+
+                // Collapsible Advanced section
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { advExpanded = !advExpanded }
+                        .padding(top = 12.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.section_advanced),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = if (advExpanded) "▾" else "▸",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 14.sp
+                    )
+                }
+
+                if (advExpanded) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedButton(
+                        onClick = {
+                            scope.launch {
+                                val res = withContext(Dispatchers.IO) { RootRouter.patchPmf() }
+                                if (res.exitCode == 0 && res.output.contains("PATCHED")) {
+                                    AppLog.log("PMF", "Patched p2p_supplicant.conf (pmf=0, ch=6, no_group_iface=1)")
+                                    Toast.makeText(context, pmfDoneMsg, Toast.LENGTH_LONG).show()
+                                } else {
+                                    AppLog.log("PMF", "Patch result: ${res.output}")
+                                    Toast.makeText(context, pmfFailMsg, Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(11.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                    ) {
+                        Text(stringResource(R.string.btn_fix_pmf))
+                    }
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = stringResource(R.string.hint_pmf),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Activity Log Card
+            FlatCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = stringResource(R.string.error_log),
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(
+                            onClick = {
+                                val text = uiState.logs.joinToString("\n")
+                                if (text.isNotBlank()) copyToClipboard(context, "MiniRepeater Log", text, copiedMsg)
+                            },
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text(stringResource(R.string.btn_copy), fontSize = 12.sp)
+                        }
+                        TextButton(
+                            onClick = { AppLog.clear() },
+                            contentPadding = PaddingValues(horizontal = 8.dp)
+                        ) {
+                            Text(
+                                text = stringResource(R.string.btn_clear_log),
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                val logBody = if (uiState.logs.isEmpty()) {
+                    stringResource(R.string.log_empty)
+                } else {
+                    uiState.logs.joinToString("\n")
+                }
+                Text(
+                    text = logBody,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(logBg)
+                        .padding(12.dp),
+                    fontFamily = FontFamily.Monospace,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
             Text(
-                text = logBody,
+                text = stringResource(R.string.footer_version),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(10.dp),
-                fontFamily = FontFamily.Monospace,
+                    .padding(top = 2.dp),
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodySmall,
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-
-        Text(
-            text = stringResource(R.string.developer_label) + ": " + stringResource(R.string.developer_name),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
@@ -448,7 +562,7 @@ private fun MiniRepeaterScreen(
 private fun FlatCard(content: @Composable () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
     ) {
@@ -459,30 +573,25 @@ private fun FlatCard(content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun StatCell(label: String, value: String) {
-    Column {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Bold
-        )
-    }
-}
-
-@Composable
-private fun ChoiceChipButton(text: String, selected: Boolean, onClick: () -> Unit) {
-    if (selected) {
-        Button(onClick = onClick, shape = RoundedCornerShape(10.dp)) {
-            Text(text, fontSize = 12.sp)
-        }
-    } else {
-        OutlinedButton(onClick = onClick, shape = RoundedCornerShape(10.dp)) {
-            Text(text, fontSize = 12.sp)
+private fun StatBox(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
