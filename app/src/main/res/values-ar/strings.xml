@@ -31,4 +31,5 @@
     <string name="msg_pmf_done">تم تعديل PMF. اقفل الواي فاي وافتحه مرة واحدة.</string>
     <string name="msg_pmf_fail">محتاج صلاحية الروت من Magisk أولاً.</string>
     <string name="msg_grant_perm">وافق على إذن الموقع / الأجهزة القريبة أولاً.</string>
+    <string name="hint_legacy_p2p">أندرويد 9 بيولّد اسم الشبكة وكلمة المرور تلقائيًا عند تشغيل البث.</string>
 </resources>

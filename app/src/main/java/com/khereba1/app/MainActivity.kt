@@ -314,7 +314,7 @@ private fun MiniRepeaterScreen(
                     onClick = {
                         if (isActive) {
                             onStopRequest()
-                        } else {
+                        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                             val cleanSsid = ssid.trim()
                             val cleanPass = password.trim()
                             val validSsid = Regex("^DIRECT-[A-Za-z0-9]{2}-.+").matches(cleanSsid)
@@ -326,6 +326,8 @@ private fun MiniRepeaterScreen(
                                 Prefs.savePassword(context, cleanPass)
                                 onStartRequest()
                             }
+                        } else {
+                            onStartRequest()
                         }
                     },
                     modifier = Modifier
@@ -356,22 +358,41 @@ private fun MiniRepeaterScreen(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                val supportsCustomP2p = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                val displaySsid = if (supportsCustomP2p) ssid else uiState.ssid.ifBlank { "—" }
+                val displayPass = if (supportsCustomP2p) password else uiState.passphrase.ifBlank { "—" }
+
+                if (!supportsCustomP2p) {
+                    Text(
+                        text = stringResource(R.string.hint_legacy_p2p),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
+
                 OutlinedTextField(
-                    value = ssid,
-                    onValueChange = { ssid = it; ssidError = null },
-                    enabled = !isActive,
+                    value = displaySsid,
+                    onValueChange = { if (supportsCustomP2p) { ssid = it; ssidError = null } },
+                    readOnly = !supportsCustomP2p,
+                    enabled = if (supportsCustomP2p) !isActive else true,
                     singleLine = true,
                     label = { Text(stringResource(R.string.label_ssid)) },
                     trailingIcon = {
                         TextButton(
-                            onClick = { copyToClipboard(context, "SSID", ssid.trim(), copiedMsg) },
+                            onClick = {
+                                val toCopy = displaySsid.trim()
+                                if (toCopy.isNotEmpty() && toCopy != "—") {
+                                    copyToClipboard(context, "SSID", toCopy, copiedMsg)
+                                }
+                            },
                             contentPadding = PaddingValues(horizontal = 8.dp)
                         ) {
                             Text(stringResource(R.string.btn_copy), fontSize = 12.sp)
                         }
                     },
-                    isError = ssidError != null,
-                    supportingText = ssidError?.let { msg -> { Text(msg) } },
+                    isError = supportsCustomP2p && ssidError != null,
+                    supportingText = if (supportsCustomP2p) ssidError?.let { msg -> { Text(msg) } } else null,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 )
@@ -379,12 +400,13 @@ private fun MiniRepeaterScreen(
                 Spacer(modifier = Modifier.height(10.dp))
 
                 OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it; passError = null },
-                    enabled = !isActive,
+                    value = displayPass,
+                    onValueChange = { if (supportsCustomP2p) { password = it; passError = null } },
+                    readOnly = !supportsCustomP2p,
+                    enabled = if (supportsCustomP2p) !isActive else true,
                     singleLine = true,
                     label = { Text(stringResource(R.string.label_password)) },
-                    visualTransformation = if (passVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    visualTransformation = if (passVisible || displayPass == "—") VisualTransformation.None else PasswordVisualTransformation(),
                     trailingIcon = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             TextButton(
@@ -397,15 +419,20 @@ private fun MiniRepeaterScreen(
                                 )
                             }
                             TextButton(
-                                onClick = { copyToClipboard(context, "Password", password.trim(), copiedMsg) },
+                                onClick = {
+                                    val toCopy = displayPass.trim()
+                                    if (toCopy.isNotEmpty() && toCopy != "—") {
+                                        copyToClipboard(context, "Password", toCopy, copiedMsg)
+                                    }
+                                },
                                 contentPadding = PaddingValues(horizontal = 6.dp)
                             ) {
                                 Text(stringResource(R.string.btn_copy), fontSize = 12.sp)
                             }
                         }
                     },
-                    isError = passError != null,
-                    supportingText = passError?.let { msg -> { Text(msg) } },
+                    isError = supportsCustomP2p && passError != null,
+                    supportingText = if (supportsCustomP2p) passError?.let { msg -> { Text(msg) } } else null,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
                 )

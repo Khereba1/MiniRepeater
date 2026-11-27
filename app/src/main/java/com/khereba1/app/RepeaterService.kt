@@ -95,7 +95,9 @@ class RepeaterService : Service() {
         bootWaitJob?.cancel()
         bootWaitJob = scope.launch {
             // Ensure background location is granted so Android 12 allows P2P createGroup from boot
-            RootRouter.runRoot("pm grant $packageName android.permission.ACCESS_BACKGROUND_LOCATION 2>/dev/null || true")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                RootRouter.runRoot("pm grant $packageName android.permission.ACCESS_BACKGROUND_LOCATION 2>/dev/null || true")
+            }
             var wifiReady = false
             repeat(22) {
                 if (userStopped) return@launch
@@ -163,19 +165,24 @@ class RepeaterService : Service() {
             return
         }
 
-        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-        @Suppress("DEPRECATION")
-        val routerFreq = wm?.connectionInfo?.frequency ?: 0
-        val configBuilder = WifiP2pConfig.Builder()
-            .setNetworkName(ssid)
-            .setPassphrase(pass)
-        if (routerFreq in 2412..2462) {
-            configBuilder.setGroupOperatingFrequency(routerFreq)
-            AppLog.log("P2P", "Matching router 2.4GHz channel (${routerFreq}MHz)")
+        val config: WifiP2pConfig? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            @Suppress("DEPRECATION")
+            val routerFreq = wm?.connectionInfo?.frequency ?: 0
+            val configBuilder = WifiP2pConfig.Builder()
+                .setNetworkName(ssid)
+                .setPassphrase(pass)
+            if (routerFreq in 2412..2462) {
+                configBuilder.setGroupOperatingFrequency(routerFreq)
+                AppLog.log("P2P", "Matching router 2.4GHz channel (${routerFreq}MHz)")
+            } else {
+                configBuilder.setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
+            }
+            configBuilder.build()
         } else {
-            configBuilder.setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ)
+            AppLog.log("P2P", "Android 9 detected; using system P2P group.")
+            null
         }
-        val config = configBuilder.build()
 
         manager.removeGroup(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
@@ -198,41 +205,52 @@ class RepeaterService : Service() {
     private fun createGroupWithFallback(
         manager: WifiP2pManager,
         channel: WifiP2pManager.Channel,
-        config: WifiP2pConfig
+        config: WifiP2pConfig?
     ) {
-        manager.createGroup(channel, config, object : WifiP2pManager.ActionListener {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && config != null) {
+            manager.createGroup(channel, config, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    bootRetriesLeft = 0
+                    AppLog.log("P2P", "Custom group created ($activeSsid).")
+                    requestGroupDetailsAndRoute(manager, channel)
+                }
+
+                override fun onFailure(reason: Int) {
+                    AppLog.log("P2P", "Custom config failed (reason=$reason); trying system P2P group...")
+                    scope.launch(Dispatchers.Main) {
+                        delay(900)
+                        if (!userStopped) createLegacySystemGroup(manager, channel)
+                    }
+                }
+            })
+        } else {
+            createLegacySystemGroup(manager, channel)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun createLegacySystemGroup(
+        manager: WifiP2pManager,
+        channel: WifiP2pManager.Channel
+    ) {
+        manager.createGroup(channel, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 bootRetriesLeft = 0
-                AppLog.log("P2P", "Custom group created ($activeSsid).")
+                AppLog.log("P2P", "System P2P group created.")
                 requestGroupDetailsAndRoute(manager, channel)
             }
 
-            override fun onFailure(reason: Int) {
-                AppLog.log("P2P", "Custom config failed (reason=$reason); trying system P2P group...")
-                scope.launch(Dispatchers.Main) {
-                    delay(900)
-                    if (userStopped) return@launch
-                    manager.createGroup(channel, object : WifiP2pManager.ActionListener {
-                        override fun onSuccess() {
-                            bootRetriesLeft = 0
-                            AppLog.log("P2P", "System P2P group created.")
-                            requestGroupDetailsAndRoute(manager, channel)
-                        }
-
-                        override fun onFailure(fallbackReason: Int) {
-                            if (bootRetriesLeft > 0 && !userStopped) {
-                                bootRetriesLeft -= 1
-                                AppLog.log("BOOT", "P2P not ready yet (reason=$fallbackReason); retrying in 8s ($bootRetriesLeft left)...")
-                                scope.launch(Dispatchers.Main) {
-                                    delay(8000)
-                                    if (!userStopped) startRepeater(isAutoRestart = false)
-                                }
-                            } else {
-                                AppLog.log("P2P", "Fallback createGroup failed (reason=$fallbackReason).")
-                                stopRepeater()
-                            }
-                        }
-                    })
+            override fun onFailure(fallbackReason: Int) {
+                if (bootRetriesLeft > 0 && !userStopped) {
+                    bootRetriesLeft -= 1
+                    AppLog.log("BOOT", "P2P not ready yet (reason=$fallbackReason); retrying in 8s ($bootRetriesLeft left)...")
+                    scope.launch(Dispatchers.Main) {
+                        delay(8000)
+                        if (!userStopped) startRepeater(isAutoRestart = false)
+                    }
+                } else {
+                    AppLog.log("P2P", "Fallback createGroup failed (reason=$fallbackReason).")
+                    stopRepeater()
                 }
             }
         })
@@ -255,7 +273,7 @@ class RepeaterService : Service() {
                 } else {
                     AppLog.log("P2P", "SSID: $realSsid | Iface: ${groupIface ?: "auto"}")
                 }
-                RepeaterState.update { it.copy(ssid = realSsid, clients = group.clientList?.size ?: 0) }
+                RepeaterState.update { it.copy(ssid = realSsid, passphrase = realPass, clients = group.clientList?.size ?: 0) }
                 updateNotification(realSsid, group.clientList?.size ?: 0)
             }
             configureRoutingAsync(groupIface)

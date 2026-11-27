@@ -15,6 +15,7 @@ data class RepeaterUiState(
     val iface: String = "—",
     val upstream: String = "wlan0",
     val ssid: String = "",
+    val passphrase: String = "",
     val clients: Int = 0,
     val logs: List<String> = emptyList()
 )

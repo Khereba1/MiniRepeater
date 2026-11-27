@@ -1,7 +1,7 @@
 <resources>
     <string name="app_name" translatable="false">MiniRepeater</string>
     <string name="developer_name" translatable="false">Khereba1</string>
-    <string name="footer_version" translatable="false">MiniRepeater v1.2.0 • Khereba1</string>
+    <string name="footer_version" translatable="false">MiniRepeater v1.2.2 • Khereba1</string>
     <string name="subtitle">Root Wi-Fi Repeater</string>
     <string name="status_running">Active</string>
     <string name="status_starting">Starting…</string>
@@ -34,4 +34,5 @@
     <string name="msg_pmf_done">PMF patched. Toggle Wi-Fi off and on once.</string>
     <string name="msg_pmf_fail">Root required (enable in Magisk Superuser).</string>
     <string name="msg_grant_perm">Grant Location / Nearby Wi-Fi permissions first.</string>
+    <string name="hint_legacy_p2p">Android 9 generates the network name &amp; password automatically when broadcasting.</string>
 </resources>
