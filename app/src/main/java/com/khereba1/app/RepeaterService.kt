@@ -34,6 +34,7 @@ class RepeaterService : Service() {
     companion object {
         const val ACTION_START = "com.khereba1.minirepeater.START"
         const val ACTION_STOP = "com.khereba1.minirepeater.STOP"
+        const val ACTION_REAPPLY_ROUTING = "com.khereba1.minirepeater.REAPPLY_ROUTING"
         const val EXTRA_FROM_BOOT = "from_boot"
         private const val CHANNEL_ID = "minirepeater_channel"
         private const val NOTIF_ID = 1001
@@ -67,6 +68,7 @@ class RepeaterService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> stopRepeater()
+            ACTION_REAPPLY_ROUTING -> reapplyRoutingLive()
             else -> {
                 val fromBoot = intent?.getBooleanExtra(EXTRA_FROM_BOOT, false) ?: false
                 if (fromBoot) {
@@ -79,6 +81,22 @@ class RepeaterService : Service() {
             }
         }
         return START_STICKY
+    }
+
+    private fun reapplyRoutingLive() {
+        val iface = activeIface ?: return
+        if (userStopped) return
+        scope.launch {
+            val useVpn = Prefs.isRouteViaVpn(this@RepeaterService)
+            val res = RootRouter.startRouting(iface, activeUpstream, useVpn)
+            val outIface = RootRouter.activeOutIface
+            if (useVpn && RootRouter.activeVpnIface == null) {
+                AppLog.log("VPN", "No active tun0 found; using $activeUpstream until VPN starts.")
+            } else {
+                AppLog.log("NET", "Route updated: ${res.output}")
+            }
+            RepeaterState.update { it.copy(upstream = outIface) }
+        }
     }
 
     private fun startAfterBootWifiWait() {
@@ -363,19 +381,23 @@ class RepeaterService : Service() {
             activeIface = foundIface
             activeUpstream = RootRouter.detectUpstream()
 
-            val res = RootRouter.startRouting(foundIface, activeUpstream)
+            val useVpnInit = Prefs.isRouteViaVpn(this@RepeaterService)
+            val res = RootRouter.startRouting(foundIface, activeUpstream, useVpnInit)
             if (res.exitCode != 0) {
                 AppLog.log("ROOT", "Routing failed: ${res.output}")
                 stopRepeater()
                 return@launch
             }
 
-            AppLog.log("NET", "Active: $foundIface -> $activeUpstream (DHCP ready)")
+            if (useVpnInit && RootRouter.activeVpnIface == null) {
+                AppLog.log("VPN", "VPN toggle is ON but no tun0 active; using $activeUpstream.")
+            }
+            AppLog.log("NET", "Active: $foundIface -> ${RootRouter.activeOutIface} (${res.output})")
             RepeaterState.update {
                 it.copy(
                     status = ServiceStatus.RUNNING,
                     iface = foundIface,
-                    upstream = activeUpstream,
+                    upstream = RootRouter.activeOutIface,
                     ssid = activeSsid
                 )
             }
@@ -391,10 +413,12 @@ class RepeaterService : Service() {
                     }
                     break
                 }
-                val issue = RootRouter.checkRoutingHealth(foundIface, activeUpstream)
+                val useVpnNow = Prefs.isRouteViaVpn(this@RepeaterService)
+                val issue = RootRouter.checkRoutingHealth(foundIface, activeUpstream, useVpnNow)
                 if (issue != null) {
-                    RootRouter.startRouting(foundIface, activeUpstream)
-                    AppLog.log("NET", "Routing rules restored ($issue).")
+                    val restored = RootRouter.startRouting(foundIface, activeUpstream, useVpnNow)
+                    RepeaterState.update { it.copy(upstream = RootRouter.activeOutIface) }
+                    AppLog.log("NET", "Routing updated ($issue -> ${restored.output}).")
                 }
                 refreshClientCount(foundIface)
             }

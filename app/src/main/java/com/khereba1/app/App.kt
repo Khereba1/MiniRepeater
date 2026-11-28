@@ -105,6 +105,7 @@ object Prefs {
     private const val KEY_SSID = "ssid"
     private const val KEY_PASS = "password"
     private const val KEY_AUTOSTART = "autostart"
+    private const val KEY_ROUTE_VPN = "route_vpn"
     private const val KEY_THEME = "theme"
     private const val KEY_LANG = "lang"
 
@@ -133,6 +134,15 @@ object Prefs {
     fun saveAutoStart(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putBoolean(KEY_AUTOSTART, enabled).apply()
+    }
+
+    fun isRouteViaVpn(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_ROUTE_VPN, false)
+
+    fun saveRouteViaVpn(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_ROUTE_VPN, enabled).apply()
     }
 
     fun getTheme(context: Context): String =

@@ -17,6 +17,10 @@ object RootRouter {
         private set
     @Volatile var activeSubnet: String = "192.168.49.0/24"
         private set
+    @Volatile var activeVpnIface: String? = null
+        private set
+    @Volatile var activeOutIface: String = "wlan0"
+        private set
 
     fun runRoot(script: String): ShellResult {
         return try {
@@ -34,7 +38,14 @@ object RootRouter {
     fun detectUpstream(): String {
         val cmd = """ip route get 8.8.8.8 2>/dev/null | sed -n 's/.*dev \([^ ]*\).*/\1/p' | head -n 1"""
         val res = runRoot(cmd)
-        return if (res.exitCode == 0 && res.output.isNotBlank()) res.output else "wlan0"
+        val dev = res.output.trim()
+        return if (res.exitCode == 0 && dev.isNotBlank() && !dev.startsWith("tun")) dev else "wlan0"
+    }
+
+    fun detectVpnInterface(): String? {
+        val res = runRoot("ip -o -4 addr show 2>/dev/null | grep -oE 'tun[0-9]+' | head -n 1")
+        val dev = res.output.trim()
+        return if (res.exitCode == 0 && dev.isNotBlank()) dev else null
     }
 
     fun selectNonCollidingSubnet(upstream: String): Int {
@@ -90,48 +101,79 @@ object RootRouter {
         return null
     }
 
-    fun startRouting(iface: String, upstream: String): ShellResult {
+    fun startRouting(iface: String, upstream: String, routeViaVpn: Boolean = false): ShellResult {
         val octet = selectNonCollidingSubnet(upstream)
         val gw = activeGatewayIp
         val sub = activeSubnet
         val rangeStart = "192.168.$octet.10"
         val rangeEnd = "192.168.$octet.250"
+        val vpnIface = if (routeViaVpn) detectVpnInterface() else null
+        activeVpnIface = vpnIface
+        activeOutIface = vpnIface ?: upstream
+
         val d = '$'
+        val vpnRules = if (vpnIface != null) {
+            """
+            ip route flush table 97 2>/dev/null || true
+            ip route add default dev "$vpnIface" table 97
+            ip rule add from $sub lookup 97 pref 95
+            iptables -t nat -I POSTROUTING 1 -s $sub -o "$vpnIface" -j MASQUERADE
+            iptables -C FORWARD -i "$iface" -o "$vpnIface" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$iface" -o "$vpnIface" -j ACCEPT
+            iptables -C FORWARD -i "$vpnIface" -o "$iface" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$vpnIface" -o "$iface" -j ACCEPT
+            """.trimIndent()
+        } else {
+            ""
+        }
+
         val cmd = """
             ip addr flush dev "$iface" 2>/dev/null || true
             ip addr add $gw/24 dev "$iface"
             ip link set "$iface" up
             echo 1 > /proc/sys/net/ipv4/ip_forward
-            ip rule del pref 90 2>/dev/null
-            ip rule del pref 100 2>/dev/null
+            ip rule del pref 90 2>/dev/null || true
+            ip rule del pref 95 2>/dev/null || true
+            ip rule del pref 100 2>/dev/null || true
+            ip route flush table 97 2>/dev/null || true
             ip rule add to $sub lookup main pref 90
             ip rule add from $sub lookup "$upstream" pref 100
             for o in 49 50 51 52 53; do
                 iptables -t nat -D POSTROUTING -s 192.168.${d}o.0/24 -o "$upstream" -j MASQUERADE 2>/dev/null || true
+                for t in tun0 tun1 tun2; do
+                    iptables -t nat -D POSTROUTING -s 192.168.${d}o.0/24 -o "${d}t" -j MASQUERADE 2>/dev/null || true
+                done
             done
             iptables -t nat -I POSTROUTING 1 -s $sub -o "$upstream" -j MASQUERADE
             iptables -t nat -C PREROUTING -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53
             iptables -t nat -C PREROUTING -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53
             iptables -C FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$iface" -o "$upstream" -j ACCEPT
             iptables -C FORWARD -i "$upstream" -o "$iface" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$upstream" -o "$iface" -j ACCEPT
+            $vpnRules
             if [ -f "$PID_FILE" ]; then kill ${d}(cat "$PID_FILE") 2>/dev/null; rm -f "$PID_FILE"; fi
             pkill -f "dnsmasq.*$iface" 2>/dev/null || true
             touch "$LEASE_FILE"
             /system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=$rangeStart,$rangeEnd,12h --dhcp-option=3,$gw --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1 || true
-            echo "OK ($sub)"
+            echo "OK ($sub -> $activeOutIface)"
         """.trimIndent()
         return runRoot(cmd)
     }
 
-    /** Returns null if intact, or a short reason tag if a rule is missing. */
-    fun checkRoutingHealth(iface: String, upstream: String): String? {
+    /** Returns null if intact, or a short reason tag if a rule is missing or VPN state changed. */
+    fun checkRoutingHealth(iface: String, upstream: String, routeViaVpn: Boolean = false): String? {
+        val currentVpn = if (routeViaVpn) detectVpnInterface() else null
+        if (currentVpn != activeVpnIface) return "VPN_CHANGED"
+
         val gw = activeGatewayIp
         val sub = activeSubnet
         val d = '$'
+        val vpnCheck = if (currentVpn != null) {
+            """if ! ip rule list | grep -q "lookup 97"; then echo "NO_VPN_RULE"; exit 0; fi"""
+        } else ""
+
         val cmd = """
             if [ "${d}(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" != "1" ]; then echo "NO_FWD"; exit 0; fi
             if ! ip -4 addr show dev "$iface" 2>/dev/null | grep -q "$gw"; then echo "NO_IP"; exit 0; fi
             if ! ip rule list | grep -q "$sub"; then echo "NO_RULE"; exit 0; fi
+            $vpnCheck
             if ! iptables -t nat -S PREROUTING 2>/dev/null | grep -q "8.8.8.8:53"; then echo "NO_DNS"; exit 0; fi
             if ! iptables -t nat -S POSTROUTING 2>/dev/null | grep -q "$sub"; then echo "NO_NAT"; exit 0; fi
             if ! iptables -S FORWARD 2>/dev/null | grep -q -- "-i $iface -o $upstream"; then echo "NO_IPT"; exit 0; fi
@@ -143,11 +185,17 @@ object RootRouter {
     }
 
     fun stopRouting(iface: String?, upstream: String): ShellResult {
+        activeVpnIface = null
+        activeOutIface = upstream
         val d = '$'
         val ifaceCleanup = if (!iface.isNullOrBlank()) {
             """
                 iptables -D FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null
                 iptables -D FORWARD -i "$upstream" -o "$iface" -j ACCEPT 2>/dev/null
+                for t in tun0 tun1 tun2; do
+                    iptables -D FORWARD -i "$iface" -o "${d}t" -j ACCEPT 2>/dev/null || true
+                    iptables -D FORWARD -i "${d}t" -o "$iface" -j ACCEPT 2>/dev/null || true
+                done
                 iptables -t nat -D PREROUTING -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null
                 iptables -t nat -D PREROUTING -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null
                 pkill -f "dnsmasq.*$iface" 2>/dev/null || true
@@ -156,10 +204,15 @@ object RootRouter {
 
         val cmd = """
             if [ -f "$PID_FILE" ]; then kill ${d}(cat "$PID_FILE") 2>/dev/null; rm -f "$PID_FILE"; fi
-            ip rule del pref 90 2>/dev/null
-            ip rule del pref 100 2>/dev/null
+            ip rule del pref 90 2>/dev/null || true
+            ip rule del pref 95 2>/dev/null || true
+            ip rule del pref 100 2>/dev/null || true
+            ip route flush table 97 2>/dev/null || true
             for o in 49 50 51 52 53; do
                 iptables -t nat -D POSTROUTING -s 192.168.${d}o.0/24 -o "$upstream" -j MASQUERADE 2>/dev/null || true
+                for t in tun0 tun1 tun2; do
+                    iptables -t nat -D POSTROUTING -s 192.168.${d}o.0/24 -o "${d}t" -j MASQUERADE 2>/dev/null || true
+                done
             done
             $ifaceCleanup
             echo "STOPPED"

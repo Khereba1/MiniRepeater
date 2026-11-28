@@ -36,4 +36,6 @@
     <string name="qr_title">اتصال مباشر عبر QR</string>
     <string name="qr_hint">امسح الكود بكاميرا أي موبايل للاتصال فورًا.</string>
     <string name="btn_close">إغلاق</string>
+    <string name="switch_route_vpn">تمرير عبر VPN (tun0)</string>
+    <string name="hint_route_vpn">يمرّر نت الأجهزة المتصلة عبر NekoBox أو أي VPN شغّال تلقائيًا.</string>
 </resources>

@@ -132,7 +132,8 @@ class MainActivity : ComponentActivity() {
                         context = this,
                         darkTheme = dark,
                         onStartRequest = { ensurePermissionsAndStart() },
-                        onStopRequest = { stopRepeaterService() }
+                        onStopRequest = { stopRepeaterService() },
+                    onReapplyRouting = { reapplyRoutingService() }
                     )
                 }
             }
@@ -168,6 +169,13 @@ class MainActivity : ComponentActivity() {
         }
         startService(intent)
     }
+
+    private fun reapplyRoutingService() {
+        val intent = Intent(this, RepeaterService::class.java).apply {
+            action = RepeaterService.ACTION_REAPPLY_ROUTING
+        }
+        startService(intent)
+    }
 }
 
 private fun copyToClipboard(context: Context, label: String, text: String, toastMsg: String) {
@@ -181,7 +189,8 @@ private fun MiniRepeaterScreen(
     context: Context,
     darkTheme: Boolean,
     onStartRequest: () -> Unit,
-    onStopRequest: () -> Unit
+    onStopRequest: () -> Unit,
+    onReapplyRouting: () -> Unit
 ) {
     val uiState by RepeaterState.state.collectAsState()
     val scope = rememberCoroutineScope()
@@ -189,6 +198,7 @@ private fun MiniRepeaterScreen(
     var ssid by remember { mutableStateOf(Prefs.getSsid(context)) }
     var password by remember { mutableStateOf(Prefs.getPassword(context)) }
     var autoStart by remember { mutableStateOf(Prefs.isAutoStart(context)) }
+    var routeViaVpn by remember { mutableStateOf(Prefs.isRouteViaVpn(context)) }
     var passVisible by remember { mutableStateOf(false) }
     var advExpanded by remember { mutableStateOf(false) }
     var showQrDialog by remember { mutableStateOf(false) }
@@ -482,6 +492,35 @@ private fun MiniRepeaterScreen(
                         onCheckedChange = {
                             autoStart = it
                             Prefs.saveAutoStart(context, it)
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+                        Text(
+                            text = stringResource(R.string.switch_route_vpn),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = stringResource(R.string.hint_route_vpn),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = routeViaVpn,
+                        onCheckedChange = {
+                            routeViaVpn = it
+                            Prefs.saveRouteViaVpn(context, it)
+                            if (isActive) onReapplyRouting()
                         }
                     )
                 }
