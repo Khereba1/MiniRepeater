@@ -12,11 +12,13 @@ import android.content.pm.ServiceInfo
 import android.location.LocationManager
 import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pConfig
+import android.net.wifi.p2p.WifiP2pGroup
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -25,6 +27,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class RepeaterService : Service() {
 
@@ -261,21 +264,47 @@ class RepeaterService : Service() {
         manager: WifiP2pManager,
         channel: WifiP2pManager.Channel
     ) {
-        manager.requestGroupInfo(channel) { group ->
-            var groupIface: String? = null
-            if (group != null) {
-                val realSsid = group.networkName ?: activeSsid
-                val realPass = group.passphrase ?: ""
-                groupIface = group.`interface`
-                activeSsid = realSsid
-                if (realPass.isNotBlank()) {
-                    AppLog.log("P2P", "SSID: $realSsid | Pass: $realPass | Iface: ${groupIface ?: "auto"}")
-                } else {
-                    AppLog.log("P2P", "SSID: $realSsid | Iface: ${groupIface ?: "auto"}")
+        scope.launch {
+            var group: WifiP2pGroup? = null
+            repeat(8) { attempt ->
+                if (userStopped) return@launch
+                val deferred = CompletableDeferred<WifiP2pGroup?>()
+                withContext(Dispatchers.Main) {
+                    manager.requestGroupInfo(channel) { g -> deferred.complete(g) }
                 }
-                RepeaterState.update { it.copy(ssid = realSsid, passphrase = realPass, clients = group.clientList?.size ?: 0) }
-                updateNotification(realSsid, group.clientList?.size ?: 0)
+                val candidate = deferred.await()
+                if (candidate != null && !candidate.networkName.isNullOrBlank()) {
+                    group = candidate
+                    if (!candidate.passphrase.isNullOrBlank() || attempt >= 2) {
+                        return@repeat
+                    }
+                }
+                delay(500)
             }
+
+            var realSsid = group?.networkName?.takeIf { it.isNotBlank() } ?: ""
+            var realPass = group?.passphrase?.takeIf { it.isNotBlank() } ?: ""
+            val groupIface = group?.`interface`
+
+            if (realSsid.isBlank() || realPass.isBlank()) {
+                val rootCreds = RootRouter.readActiveP2pCredentials()
+                if (rootCreds != null) {
+                    if (realSsid.isBlank()) realSsid = rootCreds.first
+                    if (realPass.isBlank()) realPass = rootCreds.second
+                    AppLog.log("P2P", "Loaded credentials via root fallback.")
+                }
+            }
+
+            if (realSsid.isBlank()) realSsid = activeSsid
+            activeSsid = realSsid
+            val clients = group?.clientList?.size ?: 0
+            if (realPass.isNotBlank()) {
+                AppLog.log("P2P", "SSID: $realSsid | Pass: $realPass | Iface: ${groupIface ?: "auto"}")
+            } else {
+                AppLog.log("P2P", "SSID: $realSsid | Iface: ${groupIface ?: "auto"}")
+            }
+            RepeaterState.update { it.copy(ssid = realSsid, passphrase = realPass, clients = clients) }
+            updateNotification(realSsid, clients)
             configureRoutingAsync(groupIface)
         }
     }

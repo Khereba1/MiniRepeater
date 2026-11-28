@@ -6,10 +6,17 @@ import java.io.InputStreamReader
 data class ShellResult(val exitCode: Int, val output: String)
 
 object RootRouter {
-    const val GATEWAY_IP = "192.168.49.1"
-    const val SUBNET = "192.168.49.0/24"
     const val LEASE_FILE = "/data/local/tmp/minirepeater_dhcp.leases"
     const val PID_FILE = "/data/local/tmp/minirepeater_dnsmasq.pid"
+
+    private val CANDIDATE_OCTETS = listOf(49, 50, 51, 52)
+
+    @Volatile var activeOctet: Int = 49
+        private set
+    @Volatile var activeGatewayIp: String = "192.168.49.1"
+        private set
+    @Volatile var activeSubnet: String = "192.168.49.0/24"
+        private set
 
     fun runRoot(script: String): ShellResult {
         return try {
@@ -30,6 +37,18 @@ object RootRouter {
         return if (res.exitCode == 0 && res.output.isNotBlank()) res.output else "wlan0"
     }
 
+    fun selectNonCollidingSubnet(upstream: String): Int {
+        val res = runRoot("""ip -o -4 addr show dev "$upstream" 2>/dev/null""")
+        val upstreamInfo = res.output
+        val chosen = CANDIDATE_OCTETS.firstOrNull { o ->
+            !upstreamInfo.contains("192.168.$o.")
+        } ?: 53
+        activeOctet = chosen
+        activeGatewayIp = "192.168.$chosen.1"
+        activeSubnet = "192.168.$chosen.0/24"
+        return chosen
+    }
+
     fun findP2pInterface(): String? {
         val virt = runRoot("ip -o link | grep -oE 'p2p-[a-zA-Z0-9_-]+' | head -n 1")
         if (virt.exitCode == 0 && virt.output.isNotBlank()) return virt.output
@@ -43,39 +62,78 @@ object RootRouter {
         return res.exitCode == 0 && res.output.isNotBlank()
     }
 
+    /**
+     * Root fallback for Android 9 where WifiP2pManager.requestGroupInfo() can return null.
+     * Tries `dumpsys wifip2p` first (live active group), then p2p_supplicant.conf.
+     */
+    fun readActiveP2pCredentials(): Pair<String, String>? {
+        val dump = runRoot("dumpsys wifip2p 2>/dev/null")
+        if (dump.exitCode == 0 && dump.output.isNotBlank()) {
+            val ssidMatch = Regex("""networkName:\s*(.+)""").findAll(dump.output).lastOrNull()
+            val passMatch = Regex("""passphrase:\s*(.+)""").findAll(dump.output).lastOrNull()
+            val s = ssidMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            val p = passMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            if (s.isNotBlank() && s != "null" && s != "<none>") {
+                return s to (if (p == "null" || p == "<none>") "" else p)
+            }
+        }
+        val conf = runRoot(
+            "cat /data/vendor/wifi/wpa/p2p_supplicant.conf /data/misc/wifi/p2p_supplicant.conf 2>/dev/null"
+        )
+        if (conf.exitCode == 0 && conf.output.isNotBlank()) {
+            val ssidMatch = Regex("""ssid="([^"]+)"""").findAll(conf.output).lastOrNull()
+            val pskMatch = Regex("""psk="([^"]+)"""").findAll(conf.output).lastOrNull()
+            val s = ssidMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            val p = pskMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
+            if (s.isNotBlank()) return s to p
+        }
+        return null
+    }
+
     fun startRouting(iface: String, upstream: String): ShellResult {
+        val octet = selectNonCollidingSubnet(upstream)
+        val gw = activeGatewayIp
+        val sub = activeSubnet
+        val rangeStart = "192.168.$octet.10"
+        val rangeEnd = "192.168.$octet.250"
         val d = '$'
         val cmd = """
-            ip addr replace $GATEWAY_IP/24 dev "$iface"
+            ip addr flush dev "$iface" 2>/dev/null || true
+            ip addr add $gw/24 dev "$iface"
             ip link set "$iface" up
             echo 1 > /proc/sys/net/ipv4/ip_forward
             ip rule del pref 90 2>/dev/null
             ip rule del pref 100 2>/dev/null
-            ip rule add to $SUBNET lookup main pref 90
-            ip rule add from $SUBNET lookup "$upstream" pref 100
-            iptables -t nat -C POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE 2>/dev/null || iptables -t nat -I POSTROUTING 1 -s $SUBNET -o "$upstream" -j MASQUERADE
+            ip rule add to $sub lookup main pref 90
+            ip rule add from $sub lookup "$upstream" pref 100
+            for o in 49 50 51 52 53; do
+                iptables -t nat -D POSTROUTING -s 192.168.${d}o.0/24 -o "$upstream" -j MASQUERADE 2>/dev/null || true
+            done
+            iptables -t nat -I POSTROUTING 1 -s $sub -o "$upstream" -j MASQUERADE
             iptables -t nat -C PREROUTING -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53
             iptables -t nat -C PREROUTING -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null || iptables -t nat -I PREROUTING 1 -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53
             iptables -C FORWARD -i "$iface" -o "$upstream" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$iface" -o "$upstream" -j ACCEPT
             iptables -C FORWARD -i "$upstream" -o "$iface" -j ACCEPT 2>/dev/null || iptables -I FORWARD 1 -i "$upstream" -o "$iface" -j ACCEPT
             if [ -f "$PID_FILE" ]; then kill ${d}(cat "$PID_FILE") 2>/dev/null; rm -f "$PID_FILE"; fi
-            if ! pgrep dnsmasq >/dev/null 2>&1; then
-                touch "$LEASE_FILE"
-                /system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=192.168.49.10,192.168.49.250,12h --dhcp-option=3,$GATEWAY_IP --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1 || true
-            fi
-            echo "OK"
+            pkill -f "dnsmasq.*$iface" 2>/dev/null || true
+            touch "$LEASE_FILE"
+            /system/bin/dnsmasq --interface="$iface" --bind-interfaces --dhcp-range=$rangeStart,$rangeEnd,12h --dhcp-option=3,$gw --dhcp-option=6,8.8.8.8,1.1.1.1 --port=0 --dhcp-leasefile="$LEASE_FILE" --pid-file="$PID_FILE" </dev/null >/dev/null 2>&1 || true
+            echo "OK ($sub)"
         """.trimIndent()
         return runRoot(cmd)
     }
 
     /** Returns null if intact, or a short reason tag if a rule is missing. */
     fun checkRoutingHealth(iface: String, upstream: String): String? {
+        val gw = activeGatewayIp
+        val sub = activeSubnet
         val d = '$'
         val cmd = """
             if [ "${d}(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" != "1" ]; then echo "NO_FWD"; exit 0; fi
-            if ! ip rule list | grep -q "$SUBNET"; then echo "NO_RULE"; exit 0; fi
+            if ! ip -4 addr show dev "$iface" 2>/dev/null | grep -q "$gw"; then echo "NO_IP"; exit 0; fi
+            if ! ip rule list | grep -q "$sub"; then echo "NO_RULE"; exit 0; fi
             if ! iptables -t nat -S PREROUTING 2>/dev/null | grep -q "8.8.8.8:53"; then echo "NO_DNS"; exit 0; fi
-            if ! iptables -t nat -S POSTROUTING 2>/dev/null | grep -q "$SUBNET"; then echo "NO_NAT"; exit 0; fi
+            if ! iptables -t nat -S POSTROUTING 2>/dev/null | grep -q "$sub"; then echo "NO_NAT"; exit 0; fi
             if ! iptables -S FORWARD 2>/dev/null | grep -q -- "-i $iface -o $upstream"; then echo "NO_IPT"; exit 0; fi
             echo "INTACT"
         """.trimIndent()
@@ -92,6 +150,7 @@ object RootRouter {
                 iptables -D FORWARD -i "$upstream" -o "$iface" -j ACCEPT 2>/dev/null
                 iptables -t nat -D PREROUTING -i "$iface" -p udp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null
                 iptables -t nat -D PREROUTING -i "$iface" -p tcp --dport 53 -j DNAT --to-destination 8.8.8.8:53 2>/dev/null
+                pkill -f "dnsmasq.*$iface" 2>/dev/null || true
             """.trimIndent()
         } else ""
 
@@ -99,7 +158,9 @@ object RootRouter {
             if [ -f "$PID_FILE" ]; then kill ${d}(cat "$PID_FILE") 2>/dev/null; rm -f "$PID_FILE"; fi
             ip rule del pref 90 2>/dev/null
             ip rule del pref 100 2>/dev/null
-            iptables -t nat -D POSTROUTING -s $SUBNET -o "$upstream" -j MASQUERADE 2>/dev/null
+            for o in 49 50 51 52 53; do
+                iptables -t nat -D POSTROUTING -s 192.168.${d}o.0/24 -o "$upstream" -j MASQUERADE 2>/dev/null || true
+            done
             $ifaceCleanup
             echo "STOPPED"
         """.trimIndent()

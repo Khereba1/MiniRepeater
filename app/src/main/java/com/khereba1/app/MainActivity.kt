@@ -12,6 +12,15 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import android.graphics.Bitmap
+import android.graphics.Color as AndroidColor
+import androidx.compose.foundation.Image
+import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -182,6 +191,7 @@ private fun MiniRepeaterScreen(
     var autoStart by remember { mutableStateOf(Prefs.isAutoStart(context)) }
     var passVisible by remember { mutableStateOf(false) }
     var advExpanded by remember { mutableStateOf(false) }
+    var showQrDialog by remember { mutableStateOf(false) }
     var ssidError by remember { mutableStateOf<String?>(null) }
     var passError by remember { mutableStateOf<String?>(null) }
 
@@ -278,11 +288,29 @@ private fun MiniRepeaterScreen(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    Text(
-                        text = stringResource(R.string.badge_band),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = stringResource(R.string.badge_band),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        val qrSsidNow = uiState.ssid.ifBlank { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ssid.trim() else "" }
+                        val qrPassNow = uiState.passphrase.ifBlank { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) password.trim() else "" }
+                        if (qrSsidNow.isNotBlank() && qrPassNow.isNotBlank()) {
+                            OutlinedButton(
+                                onClick = { showQrDialog = true },
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.height(30.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.btn_qr),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
@@ -583,6 +611,61 @@ private fun MiniRepeaterScreen(
             )
         }
     }
+
+    if (showQrDialog) {
+        val qrSsid = uiState.ssid.ifBlank { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) ssid.trim() else "" }
+        val qrPass = uiState.passphrase.ifBlank { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) password.trim() else "" }
+        val qrBitmap = remember(qrSsid, qrPass) { generateWifiQrBitmap(qrSsid, qrPass) }
+        AlertDialog(
+            onDismissRequest = { showQrDialog = false },
+            title = {
+                Text(
+                    text = stringResource(R.string.qr_title),
+                    fontWeight = FontWeight.SemiBold
+                )
+            },
+            text = {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    if (qrBitmap != null) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color.White)
+                                .padding(12.dp)
+                        ) {
+                            Image(
+                                bitmap = qrBitmap,
+                                contentDescription = stringResource(R.string.qr_title),
+                                modifier = Modifier.size(210.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                    Text(
+                        text = qrSsid,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(R.string.qr_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showQrDialog = false }) {
+                    Text(stringResource(R.string.btn_close))
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -620,5 +703,37 @@ private fun StatBox(label: String, value: String, modifier: Modifier = Modifier)
                 fontWeight = FontWeight.Bold
             )
         }
+    }
+}
+
+
+private fun escapeWifiQr(value: String): String =
+    value.replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace(":", "\\:")
+        .replace("\"", "\\\"")
+
+private fun generateWifiQrBitmap(ssid: String, password: String, sizePx: Int = 512): ImageBitmap? {
+    if (ssid.isBlank()) return null
+    val payload = "WIFI:T:WPA;S:${escapeWifiQr(ssid)};P:${escapeWifiQr(password)};;"
+    return try {
+        val hints = mapOf(
+            EncodeHintType.CHARACTER_SET to "UTF-8",
+            EncodeHintType.MARGIN to 1
+        )
+        val matrix = QRCodeWriter().encode(payload, BarcodeFormat.QR_CODE, sizePx, sizePx, hints)
+        val pixels = IntArray(sizePx * sizePx)
+        for (y in 0 until sizePx) {
+            val offset = y * sizePx
+            for (x in 0 until sizePx) {
+                pixels[offset + x] = if (matrix.get(x, y)) AndroidColor.BLACK else AndroidColor.WHITE
+            }
+        }
+        val bmp = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+        bmp.setPixels(pixels, 0, sizePx, 0, 0, sizePx, sizePx)
+        bmp.asImageBitmap()
+    } catch (_: Exception) {
+        null
     }
 }

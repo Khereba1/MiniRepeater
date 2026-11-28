@@ -14,8 +14,8 @@ android {
         applicationId = "com.khereba1.minirepeater"
         minSdk = 28
         targetSdk = 34
-        versionCode = 15
-        versionName = "1.2.2"
+        versionCode = 16
+        versionName = "1.2.3"
     }
 
     // Stable signing: when the env vars exist (GitHub Secrets) the release is signed with the fixed key,
@@ -75,4 +75,5 @@ dependencies {
     implementation("androidx.compose.material3:material3")
 
     // Add feature libraries below (check that the exact version exists before adding).
+    implementation("com.google.zxing:core:3.5.3")
 }
